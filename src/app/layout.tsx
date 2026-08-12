@@ -18,8 +18,8 @@ export const metadata: Metadata = {
   description: "Pokémon TCG - Rota 101",
 
   icons: {
-    icon: "/favicon.png",
-  },
+  icon: "/icon.png",
+},
 };
 
 export default function RootLayout({
