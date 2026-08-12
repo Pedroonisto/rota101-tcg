@@ -43,6 +43,10 @@ export default function PedidoPage() {
   const [erro, setErro] = useState("");
   const [mensagem, setMensagem] = useState("");
 
+  const [tipoDesconto, setTipoDesconto] = useState<"percentual" | "valor">(
+    "percentual"
+  );
+
   const [descontoInput, setDescontoInput] = useState("");
 
   useEffect(() => {
@@ -87,10 +91,7 @@ export default function PedidoPage() {
       if (itensError) {
         console.error("Erro ao carregar itens:", itensError);
 
-        setErro(
-          "Não foi possível carregar os itens do pedido."
-        );
-
+        setErro("Não foi possível carregar os itens do pedido.");
         setCarregando(false);
         return;
       }
@@ -99,6 +100,7 @@ export default function PedidoPage() {
 
       const pedidoFinal: Pedido = {
         ...pedidoData,
+        total: totalAtual,
         total_original:
           pedidoData.total_original !== null
             ? Number(pedidoData.total_original)
@@ -115,11 +117,15 @@ export default function PedidoPage() {
 
       setPedido(pedidoFinal);
 
-      setDescontoInput(
-        Number(pedidoFinal.desconto_percentual || 0) > 0
-          ? String(pedidoFinal.desconto_percentual)
-          : ""
-      );
+      if (Number(pedidoFinal.desconto_percentual || 0) > 0) {
+        setTipoDesconto("percentual");
+        setDescontoInput(String(pedidoFinal.desconto_percentual));
+      } else if (Number(pedidoFinal.desconto_valor || 0) > 0) {
+        setTipoDesconto("valor");
+        setDescontoInput(String(pedidoFinal.desconto_valor));
+      } else {
+        setDescontoInput("");
+      }
 
       setItens(itensData || []);
       setCarregando(false);
@@ -138,35 +144,13 @@ export default function PedidoPage() {
     setErro("");
 
     try {
-      /*
-       * PAGAMENTO
-       *
-       * Quando o pedido passa para "pago",
-       * usamos a função do Supabase.
-       *
-       * Ela:
-       * 1. verifica o estoque;
-       * 2. diminui o estoque;
-       * 3. altera o pedido para pago;
-       * 4. impede desconto duplicado.
-       */
-
-      if (
-        novoStatus === "pago" &&
-        pedido.status !== "pago"
-      ) {
-        const { error } = await supabase.rpc(
-          "marcar_pedido_pago",
-          {
-            p_pedido_id: pedido.id,
-          }
-        );
+      if (novoStatus === "pago" && pedido.status !== "pago") {
+        const { error } = await supabase.rpc("marcar_pedido_pago", {
+          p_pedido_id: pedido.id,
+        });
 
         if (error) {
-          console.error(
-            "Erro ao marcar pedido como pago:",
-            error
-          );
+          console.error("Erro ao marcar pedido como pago:", error);
 
           setErro(
             error.message ||
@@ -188,10 +172,6 @@ export default function PedidoPage() {
         return;
       }
 
-      /*
-       * OUTROS STATUS
-       */
-
       const { error } = await supabase
         .from("pedidos")
         .update({
@@ -200,14 +180,10 @@ export default function PedidoPage() {
         .eq("id", pedido.id);
 
       if (error) {
-        console.error(
-          "Erro ao atualizar status:",
-          error
-        );
+        console.error("Erro ao atualizar status:", error);
 
         setErro(
-          error.message ||
-            "Não foi possível atualizar o status."
+          error.message || "Não foi possível atualizar o status."
         );
 
         return;
@@ -229,18 +205,10 @@ export default function PedidoPage() {
       return;
     }
 
-    if (
-      salvando ||
-      excluindo ||
-      aplicandoDesconto
-    ) {
+    if (salvando || excluindo || aplicandoDesconto) {
       return;
     }
 
-    /*
-     * Não permitimos alterar o desconto
-     * depois que o pedido já foi pago.
-     */
     if (pedido.status === "pago") {
       setErro(
         "Não é possível alterar o desconto de um pedido que já foi pago."
@@ -254,37 +222,51 @@ export default function PedidoPage() {
     setErro("");
 
     try {
-      let percentual = Number(
-        descontoInput.replace(",", ".")
-      );
+      let entrada = Number(descontoInput.replace(",", "."));
 
-      if (!Number.isFinite(percentual)) {
-        percentual = 0;
+      if (!Number.isFinite(entrada)) {
+        entrada = 0;
       }
 
-      if (percentual < 0 || percentual > 100) {
-        setErro(
-          "O desconto deve estar entre 0% e 100%."
-        );
-
-        return;
-      }
-
-      /*
-       * Se o pedido antigo ainda não tiver
-       * total_original salvo, usamos o total
-       * atual como base.
-       */
       const totalOriginal =
         pedido.total_original !== null
           ? Number(pedido.total_original)
           : Number(pedido.total);
 
-      const descontoValor =
-        totalOriginal * (percentual / 100);
+      let percentual = 0;
+      let descontoValor = 0;
+
+      if (tipoDesconto === "percentual") {
+        if (entrada < 0 || entrada > 100) {
+          setErro("O desconto deve estar entre 0% e 100%.");
+          return;
+        }
+
+        percentual = entrada;
+        descontoValor = totalOriginal * (percentual / 100);
+      } else {
+        if (entrada < 0 || entrada > totalOriginal) {
+          setErro(
+            `O desconto em reais deve estar entre R$ 0,00 e R$ ${formatarMoeda(
+              totalOriginal
+            )}.`
+          );
+          return;
+        }
+
+        descontoValor = entrada;
+
+        percentual =
+          totalOriginal > 0
+            ? (descontoValor / totalOriginal) * 100
+            : 0;
+      }
+
+      descontoValor = Math.round(descontoValor * 100) / 100;
+      percentual = Math.round(percentual * 100) / 100;
 
       const novoTotal =
-        totalOriginal - descontoValor;
+        Math.round((totalOriginal - descontoValor) * 100) / 100;
 
       const { data, error } = await supabase
         .from("pedidos")
@@ -301,14 +283,10 @@ export default function PedidoPage() {
         .single();
 
       if (error) {
-        console.error(
-          "Erro ao aplicar desconto:",
-          error
-        );
+        console.error("Erro ao aplicar desconto:", error);
 
         setErro(
-          error.message ||
-            "Não foi possível aplicar o desconto."
+          error.message || "Não foi possível aplicar o desconto."
         );
 
         return;
@@ -316,6 +294,7 @@ export default function PedidoPage() {
 
       setPedido({
         ...data,
+        total: Number(data.total),
         total_original:
           data.total_original !== null
             ? Number(data.total_original)
@@ -331,9 +310,13 @@ export default function PedidoPage() {
       });
 
       setMensagem(
-        percentual === 0
-          ? "Desconto removido com sucesso."
-          : `Desconto de ${percentual}% aplicado com sucesso.`
+        tipoDesconto === "percentual"
+          ? `Desconto de ${formatarPercentual(
+              percentual
+            )}% aplicado com sucesso.`
+          : `Desconto de R$ ${formatarMoeda(
+              descontoValor
+            )} aplicado com sucesso.`
       );
     } finally {
       setAplicandoDesconto(false);
@@ -345,11 +328,7 @@ export default function PedidoPage() {
       return;
     }
 
-    if (
-      salvando ||
-      excluindo ||
-      aplicandoDesconto
-    ) {
+    if (salvando || excluindo || aplicandoDesconto) {
       return;
     }
 
@@ -394,10 +373,7 @@ export default function PedidoPage() {
         .single();
 
       if (error) {
-        console.error(
-          "Erro ao remover desconto:",
-          error
-        );
+        console.error("Erro ao remover desconto:", error);
 
         setErro(
           error.message ||
@@ -409,6 +385,7 @@ export default function PedidoPage() {
 
       setPedido({
         ...data,
+        total: Number(data.total),
         total_original: Number(
           data.total_original ?? totalOriginal
         ),
@@ -427,10 +404,7 @@ export default function PedidoPage() {
   }
 
   async function excluirPedido() {
-    if (
-      !pedido ||
-      pedido.status !== "cancelado"
-    ) {
+    if (!pedido || pedido.status !== "cancelado") {
       return;
     }
 
@@ -455,10 +429,7 @@ export default function PedidoPage() {
       );
 
       if (error) {
-        console.error(
-          "Erro ao excluir pedido:",
-          error
-        );
+        console.error("Erro ao excluir pedido:", error);
 
         setErro(
           error.message ||
@@ -466,7 +437,6 @@ export default function PedidoPage() {
         );
 
         setExcluindo(false);
-
         return;
       }
 
@@ -474,22 +444,16 @@ export default function PedidoPage() {
     } catch (error) {
       console.error(error);
 
-      setErro(
-        "Ocorreu um erro ao excluir o pedido."
-      );
-
+      setErro("Ocorreu um erro ao excluir o pedido.");
       setExcluindo(false);
     }
   }
 
   function formatarData(data: string) {
-    return new Date(data).toLocaleString(
-      "pt-BR",
-      {
-        dateStyle: "short",
-        timeStyle: "short",
-      }
-    );
+    return new Date(data).toLocaleString("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    });
   }
 
   function formatarStatus(status: string) {
@@ -534,8 +498,13 @@ export default function PedidoPage() {
   }
 
   function formatarMoeda(valor: number) {
+    return Number(valor).toFixed(2).replace(".", ",");
+  }
+
+  function formatarPercentual(valor: number) {
     return Number(valor)
       .toFixed(2)
+      .replace(/\.00$/, "")
       .replace(".", ",");
   }
 
@@ -544,9 +513,7 @@ export default function PedidoPage() {
       <main className="min-h-screen bg-[#111315] text-[#E8E4D8]">
         <div className="flex min-h-screen items-center justify-center">
           <div className="text-center">
-            <div className="text-5xl">
-              🛒
-            </div>
+            <div className="text-5xl">🛒</div>
 
             <p className="mt-4 text-sm text-[#77746D]">
               Carregando pedido...
@@ -562,17 +529,14 @@ export default function PedidoPage() {
       <main className="min-h-screen bg-[#111315] text-[#E8E4D8]">
         <div className="flex min-h-screen items-center justify-center px-5">
           <div className="text-center">
-            <div className="text-5xl">
-              🛒
-            </div>
+            <div className="text-5xl">🛒</div>
 
             <h1 className="mt-5 text-3xl font-black">
               Pedido não encontrado
             </h1>
 
             <p className="mt-3 text-sm text-red-300">
-              {erro ||
-                "O pedido solicitado não existe."}
+              {erro || "O pedido solicitado não existe."}
             </p>
 
             <Link
@@ -608,17 +572,9 @@ export default function PedidoPage() {
 
   return (
     <main className="min-h-screen bg-[#111315] text-[#E8E4D8]">
-
-      {/* =====================================================
-          HEADER
-          ===================================================== */}
-
       <header className="border-b border-white/[0.06] bg-[#181a1d]">
-
         <div className="mx-auto flex h-24 max-w-7xl items-center justify-between px-5 sm:px-6">
-
           <div>
-
             <p className="text-xs font-extrabold uppercase tracking-widest text-[#77746D]">
               Rota 101 TCG
             </p>
@@ -626,11 +582,9 @@ export default function PedidoPage() {
             <h1 className="mt-1 text-2xl font-black">
               Pedido #{pedido.id}
             </h1>
-
           </div>
 
           <div className="flex items-center gap-3">
-
             <Link
               href="/admin/pedidos"
               className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold transition hover:bg-zinc-900"
@@ -644,21 +598,11 @@ export default function PedidoPage() {
             >
               Painel
             </Link>
-
           </div>
-
         </div>
-
       </header>
 
-      {/* =====================================================
-          CONTEÚDO
-          ===================================================== */}
-
       <section className="mx-auto max-w-7xl px-5 py-10 sm:px-6 md:py-14">
-
-        {/* VOLTAR */}
-
         <Link
           href="/admin/pedidos"
           className="mb-8 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-[#1e2125] px-5 py-3 text-xs font-extrabold uppercase tracking-wider text-[#AAA69C] transition hover:border-[#d6b85a]/30 hover:text-[#E8E4D8]"
@@ -666,16 +610,9 @@ export default function PedidoPage() {
           ← Voltar para pedidos
         </Link>
 
-        {/* =====================================================
-            CABEÇALHO DO PEDIDO
-            ===================================================== */}
-
         <div className="rounded-[2rem] border border-white/[0.07] bg-[#1e2125] p-6 shadow-[0_20px_50px_rgba(0,0,0,0.25)] sm:p-8">
-
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-
             <div>
-
               <p className="text-xs font-extrabold uppercase tracking-[0.25em] text-[#77746D]">
                 ✦ Pedido
               </p>
@@ -685,32 +622,23 @@ export default function PedidoPage() {
               </h2>
 
               <p className="mt-2 text-sm text-[#77746D]">
-                Realizado em{" "}
-                {formatarData(
-                  pedido.created_at
-                )}
+                Realizado em {formatarData(pedido.created_at)}
               </p>
-
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-
               <span
                 className={`rounded-full border px-5 py-2.5 text-xs font-extrabold uppercase tracking-wider ${classeStatus(
                   pedido.status
                 )}`}
               >
-                {formatarStatus(
-                  pedido.status
-                )}
+                {formatarStatus(pedido.status)}
               </span>
 
               <select
                 value={pedido.status}
                 onChange={(event) =>
-                  alterarStatus(
-                    event.target.value
-                  )
+                  alterarStatus(event.target.value)
                 }
                 disabled={
                   salvando ||
@@ -719,7 +647,6 @@ export default function PedidoPage() {
                 }
                 className="rounded-full border border-white/[0.08] bg-[#222529] px-5 py-3 text-xs font-extrabold uppercase tracking-wider text-[#E8E4D8] outline-none transition focus:border-[#d6b85a]/50 disabled:cursor-not-allowed disabled:opacity-50"
               >
-
                 <option value="pendente">
                   Pendente
                 </option>
@@ -739,16 +666,9 @@ export default function PedidoPage() {
                 <option value="cancelado">
                   Cancelado
                 </option>
-
               </select>
-
             </div>
-
           </div>
-
-          {/* =====================================================
-              MENSAGENS
-              ===================================================== */}
 
           {mensagem && (
             <div className="mt-6 rounded-xl border border-green-500/20 bg-green-500/10 px-4 py-3 text-sm text-green-300">
@@ -762,32 +682,21 @@ export default function PedidoPage() {
             </div>
           )}
 
-          {/* =====================================================
-              EXCLUIR
-              ===================================================== */}
-
-          {pedido.status ===
-            "cancelado" && (
+          {pedido.status === "cancelado" && (
             <div className="mt-7 flex flex-col gap-4 rounded-2xl border border-red-500/15 bg-red-500/5 p-5 sm:flex-row sm:items-center sm:justify-between">
-
               <div>
-
                 <p className="font-bold text-red-300">
                   Pedido cancelado
                 </p>
 
                 <p className="mt-1 text-xs leading-5 text-[#77746D]">
-                  Este pedido pode ser
-                  excluído permanentemente.
+                  Este pedido pode ser excluído permanentemente.
                 </p>
-
               </div>
 
               <button
                 type="button"
-                onClick={
-                  excluirPedido
-                }
+                onClick={excluirPedido}
                 disabled={
                   excluindo ||
                   salvando ||
@@ -799,28 +708,14 @@ export default function PedidoPage() {
                   ? "Excluindo..."
                   : "🗑️ Excluir pedido"}
               </button>
-
             </div>
           )}
-
         </div>
 
-        {/* =====================================================
-            GRID
-            ===================================================== */}
-
         <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
-
-          {/* ===================================================
-              ITENS
-              =================================================== */}
-
           <section className="rounded-[2rem] border border-white/[0.07] bg-[#1e2125] p-6 shadow-[0_20px_50px_rgba(0,0,0,0.25)] sm:p-8">
-
             <div className="mb-7 flex items-center justify-between">
-
               <div>
-
                 <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-[#77746D]">
                   ✦ Itens do pedido
                 </p>
@@ -828,7 +723,6 @@ export default function PedidoPage() {
                 <h3 className="mt-2 text-2xl font-black">
                   Produtos
                 </h3>
-
               </div>
 
               <span className="rounded-full border border-white/[0.08] bg-[#222529] px-4 py-2 text-xs font-bold text-[#AAA69C]">
@@ -837,54 +731,38 @@ export default function PedidoPage() {
                   ? "item"
                   : "itens"}
               </span>
-
             </div>
 
             {itens.length === 0 ? (
-
               <div className="rounded-2xl border border-white/[0.06] bg-[#222529] p-10 text-center">
-
                 <div className="text-5xl opacity-40">
                   📦
                 </div>
 
                 <p className="mt-4 text-sm text-[#77746D]">
-                  Nenhum item encontrado
-                  neste pedido.
+                  Nenhum item encontrado neste pedido.
                 </p>
-
               </div>
-
             ) : (
-
               <div className="space-y-4">
-
                 {itens.map((item) => (
-
                   <div
                     key={item.id}
                     className="rounded-2xl border border-white/[0.06] bg-[#222529] p-5"
                   >
-
                     <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-
                       <div>
-
                         <h4 className="text-lg font-black">
                           {item.nome_produto}
                         </h4>
 
                         <p className="mt-1 text-xs text-[#77746D]">
-                          Produto #
-                          {item.produto_id}
+                          Produto #{item.produto_id}
                         </p>
-
                       </div>
 
                       <div className="grid grid-cols-3 gap-6 sm:text-right">
-
                         <div>
-
                           <p className="text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
                             Quantidade
                           </p>
@@ -892,65 +770,37 @@ export default function PedidoPage() {
                           <p className="mt-1 font-black">
                             {item.quantidade}
                           </p>
-
                         </div>
 
                         <div>
-
                           <p className="text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
                             Unitário
                           </p>
 
                           <p className="mt-1 font-black">
-                            R${" "}
-                            {formatarMoeda(
-                              Number(
-                                item.preco_unitario
-                              )
-                            )}
+                            R$ {formatarMoeda(Number(item.preco_unitario))}
                           </p>
-
                         </div>
 
                         <div>
-
                           <p className="text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
                             Subtotal
                           </p>
 
                           <p className="mt-1 font-black text-[#e8cf73]">
-                            R${" "}
-                            {formatarMoeda(
-                              Number(
-                                item.subtotal
-                              )
-                            )}
+                            R$ {formatarMoeda(Number(item.subtotal))}
                           </p>
-
                         </div>
-
                       </div>
-
                     </div>
-
                   </div>
-
                 ))}
-
               </div>
-
             )}
-
           </section>
 
-          {/* ===================================================
-              RESUMO
-              =================================================== */}
-
           <aside className="lg:sticky lg:top-6 lg:h-fit">
-
             <div className="rounded-[2rem] border border-[#d6b85a]/15 bg-[#1e2125] p-7 shadow-[0_25px_60px_rgba(0,0,0,0.3)]">
-
               <p className="text-xs font-extrabold uppercase tracking-[0.25em] text-[#77746D]">
                 ✦ Resumo
               </p>
@@ -961,10 +811,7 @@ export default function PedidoPage() {
 
               <div className="my-7 border-t border-white/[0.07]" />
 
-              {/* PRODUTOS */}
-
               <div className="flex items-center justify-between">
-
                 <span className="text-sm font-bold text-[#77746D]">
                   Produtos
                 </span>
@@ -972,18 +819,13 @@ export default function PedidoPage() {
                 <span className="text-sm font-black">
                   {itens.reduce(
                     (total, item) =>
-                      total +
-                      item.quantidade,
+                      total + item.quantidade,
                     0
                   )}
                 </span>
-
               </div>
 
-              {/* ITENS DIFERENTES */}
-
               <div className="mt-4 flex items-center justify-between">
-
                 <span className="text-sm font-bold text-[#77746D]">
                   Itens diferentes
                 </span>
@@ -991,21 +833,13 @@ export default function PedidoPage() {
                 <span className="text-sm font-black">
                   {itens.length}
                 </span>
-
               </div>
 
               <div className="my-7 border-t border-white/[0.07]" />
 
-              {/* =================================================
-                  DESCONTO
-                  ================================================= */}
-
               <div className="rounded-2xl border border-white/[0.07] bg-[#222529] p-5">
-
                 <div className="flex items-center justify-between">
-
                   <div>
-
                     <p className="text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
                       Desconto
                     </p>
@@ -1013,84 +847,130 @@ export default function PedidoPage() {
                     <p className="mt-1 text-sm font-black">
                       Dar desconto ao cliente
                     </p>
-
                   </div>
 
-                  {descontoPercentual >
-                    0 && (
+                  {descontoPercentual > 0 && (
                     <span className="rounded-full border border-green-500/20 bg-green-500/10 px-3 py-1 text-xs font-extrabold text-green-300">
-                      -{formatarMoeda(
-                        descontoPercentual
-                      )}%
+                      -{formatarPercentual(descontoPercentual)}%
                     </span>
                   )}
-
                 </div>
 
-                {pedido.status ===
-                "pago" ? (
-
+                {pedido.status === "pago" ? (
                   <div className="mt-5 rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4">
-
                     <p className="text-xs font-bold leading-5 text-yellow-300">
-                      Este pedido já foi
-                      pago. O desconto não
-                      pode mais ser alterado.
+                      Este pedido já foi pago. O desconto não pode mais ser alterado.
                     </p>
-
                   </div>
-
                 ) : (
-
                   <>
+                    <div className="mt-5">
+                      <label className="mb-2 block text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
+                        Tipo de desconto
+                      </label>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTipoDesconto("percentual");
+                            setDescontoInput(
+                              descontoPercentual > 0
+                                ? String(descontoPercentual)
+                                : ""
+                            );
+                          }}
+                          disabled={
+                            aplicandoDesconto ||
+                            salvando ||
+                            excluindo
+                          }
+                          className={`rounded-xl border px-4 py-3 text-xs font-extrabold uppercase tracking-wider transition ${
+                            tipoDesconto === "percentual"
+                              ? "border-[#d6b85a]/50 bg-[#d6b85a]/15 text-[#e8cf73]"
+                              : "border-white/[0.08] bg-[#181a1d] text-[#77746D] hover:border-white/[0.15]"
+                          }`}
+                        >
+                          Percentual %
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTipoDesconto("valor");
+                            setDescontoInput(
+                              descontoValor > 0
+                                ? String(descontoValor)
+                                : ""
+                            );
+                          }}
+                          disabled={
+                            aplicandoDesconto ||
+                            salvando ||
+                            excluindo
+                          }
+                          className={`rounded-xl border px-4 py-3 text-xs font-extrabold uppercase tracking-wider transition ${
+                            tipoDesconto === "valor"
+                              ? "border-[#d6b85a]/50 bg-[#d6b85a]/15 text-[#e8cf73]"
+                              : "border-white/[0.08] bg-[#181a1d] text-[#77746D] hover:border-white/[0.15]"
+                          }`}
+                        >
+                          Valor R$
+                        </button>
+                      </div>
+                    </div>
 
                     <div className="mt-5">
-
                       <label
                         htmlFor="desconto"
                         className="mb-2 block text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]"
                       >
-                        Desconto em %
+                        {tipoDesconto === "percentual"
+                          ? "Desconto em %"
+                          : "Desconto em R$"}
                       </label>
 
                       <div className="flex gap-2">
-
                         <div className="relative flex-1">
-
                           <input
                             id="desconto"
                             type="number"
                             min="0"
-                            max="100"
-                            step="0.01"
-                            value={
-                              descontoInput
+                            max={
+                              tipoDesconto === "percentual"
+                                ? 100
+                                : totalOriginal
                             }
+                            step="0.01"
+                            value={descontoInput}
                             onChange={(event) =>
                               setDescontoInput(
                                 event.target.value
                               )
                             }
-                            placeholder="Ex.: 20"
+                            placeholder={
+                              tipoDesconto === "percentual"
+                                ? "Ex.: 20"
+                                : "Ex.: 50,00"
+                            }
                             disabled={
                               aplicandoDesconto ||
                               salvando ||
                               excluindo
                             }
-                            className="w-full rounded-xl border border-white/[0.08] bg-[#181a1d] px-4 py-3 pr-10 text-sm font-bold text-[#E8E4D8] outline-none transition focus:border-[#d6b85a]/50 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="w-full rounded-xl border border-white/[0.08] bg-[#181a1d] px-4 py-3 pr-12 text-sm font-bold text-[#E8E4D8] outline-none transition focus:border-[#d6b85a]/50 disabled:cursor-not-allowed disabled:opacity-50"
                           />
 
                           <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm font-black text-[#77746D]">
-                            %
+                            {tipoDesconto === "percentual"
+                              ? "%"
+                              : "R$"}
                           </span>
-
                         </div>
 
                         <button
                           type="button"
-                          onClick={
-                            aplicarDesconto
-                          }
+                          onClick={aplicarDesconto}
                           disabled={
                             aplicandoDesconto ||
                             salvando ||
@@ -1102,19 +982,35 @@ export default function PedidoPage() {
                             ? "Salvando..."
                             : "Aplicar"}
                         </button>
-
                       </div>
-
                     </div>
 
-                    {descontoPercentual >
-                      0 && (
+                    {descontoValor > 0 && (
+                      <div className="mt-4 rounded-xl border border-green-500/10 bg-green-500/5 p-3">
+                        <p className="text-xs text-green-300">
+                          Desconto atual:{" "}
+                          <strong>
+                            {formatarPercentual(
+                              descontoPercentual
+                            )}
+                            %
+                          </strong>{" "}
+                          (
+                          <strong>
+                            R${" "}
+                            {formatarMoeda(
+                              descontoValor
+                            )}
+                          </strong>
+                          )
+                        </p>
+                      </div>
+                    )}
 
+                    {descontoValor > 0 && (
                       <button
                         type="button"
-                        onClick={
-                          removerDesconto
-                        }
+                        onClick={removerDesconto}
                         disabled={
                           aplicandoDesconto ||
                           salvando ||
@@ -1124,119 +1020,71 @@ export default function PedidoPage() {
                       >
                         Remover desconto
                       </button>
-
                     )}
-
                   </>
-
                 )}
-
               </div>
 
-              {/* =================================================
-                  VALORES
-                  ================================================= */}
-
               <div className="mt-6 space-y-4">
-
                 <div className="flex items-center justify-between">
-
                   <span className="text-sm font-bold text-[#77746D]">
                     Total dos produtos
                   </span>
 
                   <span className="text-sm font-black">
-                    R${" "}
-                    {formatarMoeda(
-                      totalOriginal
-                    )}
+                    R$ {formatarMoeda(totalOriginal)}
                   </span>
-
                 </div>
 
-                {descontoValor >
-                  0 && (
-
+                {descontoValor > 0 && (
                   <div className="flex items-center justify-between">
-
                     <span className="text-sm font-bold text-green-400">
                       Desconto (
-                      {formatarMoeda(
+                      {formatarPercentual(
                         descontoPercentual
                       )}
                       %)
                     </span>
 
                     <span className="text-sm font-black text-green-400">
-                      - R${" "}
-                      {formatarMoeda(
-                        descontoValor
-                      )}
+                      - R$ {formatarMoeda(descontoValor)}
                     </span>
-
                   </div>
-
                 )}
-
               </div>
 
               <div className="my-7 border-t border-white/[0.07]" />
-
-              {/* TOTAL FINAL */}
 
               <p className="text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
                 Total final do pedido
               </p>
 
               <p className="mt-2 text-4xl font-black text-[#e8cf73]">
-                R${" "}
-                {formatarMoeda(
-                  totalFinal
-                )}
+                R$ {formatarMoeda(totalFinal)}
               </p>
 
-              {descontoValor >
-                0 && (
-
+              {descontoValor > 0 && (
                 <p className="mt-2 text-xs text-green-400">
                   Cliente economizou R${" "}
-                  {formatarMoeda(
-                    descontoValor
-                  )}
+                  {formatarMoeda(descontoValor)}
                 </p>
-
               )}
 
-              {/* STATUS */}
-
               <div className="mt-6 rounded-xl border border-white/[0.06] bg-[#222529] p-4">
-
                 <p className="text-[10px] font-extrabold uppercase tracking-widest text-[#77746D]">
                   Status atual
                 </p>
 
                 <p className="mt-2 text-sm font-black">
-                  {formatarStatus(
-                    pedido.status
-                  )}
+                  {formatarStatus(pedido.status)}
                 </p>
-
               </div>
-
             </div>
-
           </aside>
-
         </div>
-
       </section>
 
-      {/* =====================================================
-          FOOTER
-          ===================================================== */}
-
       <footer className="border-t border-white/[0.04] px-5 py-10 text-center">
-
         <p className="text-xs uppercase tracking-widest text-[#77746D]">
           Pokémon TCG • Sealed Products
         </p>
@@ -1244,9 +1092,7 @@ export default function PedidoPage() {
         <p className="mt-4 text-xs text-zinc-700">
           © 2026 Rota 101 TCG
         </p>
-
       </footer>
-
     </main>
   );
 }
