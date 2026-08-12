@@ -21,32 +21,99 @@ type Colecao = {
   id: number;
   nome: string;
   imagem: string | null;
+  produtosDisponiveis: number;
+};
+
+type Produto = {
+  colecao_id: number | null;
+  estoque: number | null;
 };
 
 export default function Home() {
   const [colecoes, setColecoes] = useState<Colecao[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  const [filtro, setFiltro] = useState<"disponiveis" | "todos">(
+    "disponiveis"
+  );
 
   useEffect(() => {
     async function carregarColecoes() {
-      const { data, error } = await supabase
-        .from("colecoes")
-        .select("id, nome, imagem")
-        .order("created_at", { ascending: false });
+      setCarregando(true);
+      setErro("");
 
-      if (error) {
-        console.error(error);
+      const [
+        { data: colecoesData, error: colecoesError },
+        { data: produtosData, error: produtosError },
+      ] = await Promise.all([
+        supabase
+          .from("colecoes")
+          .select("id, nome, imagem")
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("produtos")
+          .select("colecao_id, estoque"),
+      ]);
+
+      if (colecoesError) {
+        console.error(colecoesError);
         setErro("Não foi possível carregar as coleções.");
-      } else {
-        setColecoes(data || []);
+        setCarregando(false);
+        return;
       }
 
+      if (produtosError) {
+        console.error(produtosError);
+        setErro("Não foi possível carregar os produtos.");
+        setCarregando(false);
+        return;
+      }
+
+      const produtos = (produtosData || []) as Produto[];
+
+      const colecoesComEstoque: Colecao[] = (colecoesData || []).map(
+        (colecao) => {
+          const produtosDisponiveis = produtos.filter(
+            (produto) =>
+              produto.colecao_id === colecao.id &&
+              Number(produto.estoque || 0) > 0
+          ).length;
+
+          return {
+            id: colecao.id,
+            nome: colecao.nome,
+            imagem: colecao.imagem,
+            produtosDisponiveis,
+          };
+        }
+      );
+
+      setColecoes(colecoesComEstoque);
       setCarregando(false);
     }
 
     carregarColecoes();
   }, []);
+
+  /*
+   * DISPONÍVEIS:
+   * - Somente coleções com pelo menos 1 produto disponível
+   * - Ordenadas pela quantidade de produtos disponíveis
+   *
+   * TODOS:
+   * - Todas as coleções cadastradas
+   * - Mantém a ordem original de cadastro
+   */
+  const colecoesExibidas =
+    filtro === "disponiveis"
+      ? [...colecoes]
+          .filter((colecao) => colecao.produtosDisponiveis > 0)
+          .sort(
+            (a, b) =>
+              b.produtosDisponiveis - a.produtosDisponiveis
+          )
+      : colecoes;
 
   return (
     <main
@@ -61,18 +128,66 @@ export default function Home() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(214,184,90,0.08),transparent_50%)]" />
 
         <div className="pokemon-area absolute inset-0 z-10 overflow-hidden">
-          <img src="/pokemon/pikachu.png" alt="" className="pokemon pokemon-1" />
-          <img src="/pokemon/gengar.png" alt="" className="pokemon pokemon-2" />
-          <img src="/pokemon/typhlosion.png" alt="" className="pokemon pokemon-3" />
-          <img src="/pokemon/eevee.png" alt="" className="pokemon pokemon-4" />
-          <img src="/pokemon/charizard.png" alt="" className="pokemon pokemon-5" />
-          <img src="/pokemon/mewtwo.png" alt="" className="pokemon pokemon-6" />
-          <img src="/pokemon/mew.png" alt="" className="pokemon pokemon-7" />
-          <img src="/pokemon/rayquaza.png" alt="" className="pokemon pokemon-8" />
-          <img src="/pokemon/zapdos.png" alt="" className="pokemon pokemon-9" />
-          <img src="/pokemon/lucario.png" alt="" className="pokemon pokemon-10" />
-          <img src="/pokemon/greninja.png" alt="" className="pokemon pokemon-11" />
-          <img src="/pokemon/darkrai.png" alt="" className="pokemon pokemon-12" />
+          <img
+            src="/pokemon/pikachu.png"
+            alt=""
+            className="pokemon pokemon-1"
+          />
+          <img
+            src="/pokemon/gengar.png"
+            alt=""
+            className="pokemon pokemon-2"
+          />
+          <img
+            src="/pokemon/typhlosion.png"
+            alt=""
+            className="pokemon pokemon-3"
+          />
+          <img
+            src="/pokemon/eevee.png"
+            alt=""
+            className="pokemon pokemon-4"
+          />
+          <img
+            src="/pokemon/charizard.png"
+            alt=""
+            className="pokemon pokemon-5"
+          />
+          <img
+            src="/pokemon/mewtwo.png"
+            alt=""
+            className="pokemon pokemon-6"
+          />
+          <img
+            src="/pokemon/mew.png"
+            alt=""
+            className="pokemon pokemon-7"
+          />
+          <img
+            src="/pokemon/rayquaza.png"
+            alt=""
+            className="pokemon pokemon-8"
+          />
+          <img
+            src="/pokemon/zapdos.png"
+            alt=""
+            className="pokemon pokemon-9"
+          />
+          <img
+            src="/pokemon/lucario.png"
+            alt=""
+            className="pokemon pokemon-10"
+          />
+          <img
+            src="/pokemon/greninja.png"
+            alt=""
+            className="pokemon pokemon-11"
+          />
+          <img
+            src="/pokemon/darkrai.png"
+            alt=""
+            className="pokemon pokemon-12"
+          />
         </div>
 
         <div className="pointer-events-none absolute inset-0 z-20 bg-gradient-to-r from-[#181a1d] via-transparent to-[#181a1d]" />
@@ -455,6 +570,40 @@ export default function Home() {
             </div>
           </div>
 
+          {/* =====================================================
+              FILTRO
+          ===================================================== */}
+
+          {!carregando && !erro && colecoes.length > 0 && (
+            <div className="relative z-30 mb-10 flex justify-center">
+              <div className="flex w-full max-w-md rounded-full border border-white/10 bg-[#1e2125] p-1.5 shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => setFiltro("disponiveis")}
+                  className={`flex-1 rounded-full px-5 py-3 text-[12px] font-extrabold uppercase tracking-[0.14em] transition duration-300 ${
+                    filtro === "disponiveis"
+                      ? "bg-[#d0b65b] text-[#17181a] shadow-lg"
+                      : "text-[#AAA69C] hover:text-[#E8E4D8]"
+                  }`}
+                >
+                  Disponíveis
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFiltro("todos")}
+                  className={`flex-1 rounded-full px-5 py-3 text-[12px] font-extrabold uppercase tracking-[0.14em] transition duration-300 ${
+                    filtro === "todos"
+                      ? "bg-[#d0b65b] text-[#17181a] shadow-lg"
+                      : "text-[#AAA69C] hover:text-[#E8E4D8]"
+                  }`}
+                >
+                  Todos
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="relative">
             <div className="pointer-events-none absolute inset-0 z-0 hidden xl:block">
               <img
@@ -519,24 +668,40 @@ export default function Home() {
                 <div className="rounded-[2rem] border border-red-900/40 bg-[#211d1e] p-10 text-center">
                   <p className="font-semibold text-red-400">{erro}</p>
                 </div>
-              ) : colecoes.length === 0 ? (
+              ) : colecoesExibidas.length === 0 ? (
                 <div className="rounded-[2rem] border border-white/10 bg-[#1e2125] p-12 text-center">
-                  <div className="text-5xl opacity-50">🗂️</div>
+                  <div className="text-5xl opacity-50">
+                    {filtro === "disponiveis" ? "📦" : "🗂️"}
+                  </div>
 
                   <h3
                     className="mt-5 text-[2rem] leading-none text-[#E8E4D8]"
                     style={{ fontFamily: "var(--font-bebas)" }}
                   >
-                    Ainda não tem coleção por aqui
+                    {filtro === "disponiveis"
+                      ? "Nenhum produto disponível"
+                      : "Ainda não tem coleção por aqui"}
                   </h3>
 
                   <p className="mt-2 text-sm text-[#AAA69C]">
-                    Assim que você cadastrar uma, ela aparece aqui.
+                    {filtro === "disponiveis"
+                      ? "No momento não temos produtos disponíveis em estoque."
+                      : "Assim que você cadastrar uma, ela aparece aqui."}
                   </p>
+
+                  {filtro === "disponiveis" && colecoes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFiltro("todos")}
+                      className="mt-6 rounded-full border border-[#d6b85a] bg-[#d0b65b] px-6 py-3 text-sm font-extrabold text-[#17181a] transition hover:-translate-y-1 hover:bg-[#e0c873]"
+                    >
+                      Ver todas as coleções
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 lg:gap-8">
-                  {colecoes.map((colecao, index) => (
+                  {colecoesExibidas.map((colecao, index) => (
                     <Link
                       key={colecao.id}
                       href={`/colecao/${colecao.id}`}
